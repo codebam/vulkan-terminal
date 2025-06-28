@@ -302,10 +302,12 @@ impl TextRenderer {
     ) -> Result<(vk::Buffer, vk::DeviceMemory), Box<dyn std::error::Error>> {
         let buffer_size = (mem::size_of::<Vertex>() * 1024) as vk::DeviceSize;
 
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(buffer_size)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer_info = vk::BufferCreateInfo {
+            size: buffer_size,
+            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
 
         let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
 
@@ -321,9 +323,11 @@ impl TextRenderer {
             &mem_properties,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
+        let alloc_info = vk::MemoryAllocateInfo {
+            allocation_size: mem_requirements.size,
+            memory_type_index,
+            ..Default::default()
+        };
 
         let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
 
@@ -339,10 +343,12 @@ impl TextRenderer {
     ) -> Result<(vk::Buffer, vk::DeviceMemory), Box<dyn std::error::Error>> {
         let buffer_size = (mem::size_of::<u16>() * 6144) as vk::DeviceSize;
 
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(buffer_size)
-            .usage(vk::BufferUsageFlags::INDEX_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer_info = vk::BufferCreateInfo {
+            size: buffer_size,
+            usage: vk::BufferUsageFlags::INDEX_BUFFER,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
 
         let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
 
@@ -358,9 +364,11 @@ impl TextRenderer {
             &mem_properties,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
+        let alloc_info = vk::MemoryAllocateInfo {
+            allocation_size: mem_requirements.size,
+            memory_type_index,
+            ..Default::default()
+        };
 
         let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
 
@@ -377,21 +385,23 @@ impl TextRenderer {
         let width = 1024;
         let height = 1024;
 
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D {
+        let image_info = vk::ImageCreateInfo {
+            image_type: vk::ImageType::TYPE_2D,
+            extent: vk::Extent3D {
                 width,
                 height,
                 depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(vk::Format::R8_UNORM)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::TYPE_1);
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            format: vk::Format::R8_UNORM,
+            tiling: vk::ImageTiling::OPTIMAL,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            samples: vk::SampleCountFlags::TYPE_1,
+            ..Default::default()
+        };
 
         let image = unsafe { device.create_image(&image_info, None)? };
 
@@ -407,9 +417,11 @@ impl TextRenderer {
             &mem_properties,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
+        let alloc_info = vk::MemoryAllocateInfo {
+            allocation_size: mem_requirements.size,
+            memory_type_index,
+            ..Default::default()
+        };
 
         let image_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
 
@@ -422,50 +434,58 @@ impl TextRenderer {
         device: &Device,
         texture_image: vk::Image,
     ) -> Result<vk::ImageView, vk::Result> {
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(texture_image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8_UNORM)
-            .subresource_range(vk::ImageSubresourceRange {
+        let view_info = vk::ImageViewCreateInfo {
+            image: texture_image,
+            view_type: vk::ImageViewType::TYPE_2D,
+            format: vk::Format::R8_UNORM,
+            subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            });
+            },
+            ..Default::default()
+        };
 
         unsafe { device.create_image_view(&view_info, None) }
     }
 
     fn create_texture_sampler(device: &Device) -> Result<vk::Sampler, vk::Result> {
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(false)
-            .max_anisotropy(1.0)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::ALWAYS)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .mip_lod_bias(0.0)
-            .min_lod(0.0)
-            .max_lod(0.0);
+        let sampler_info = vk::SamplerCreateInfo {
+            mag_filter: vk::Filter::LINEAR,
+            min_filter: vk::Filter::LINEAR,
+            address_mode_u: vk::SamplerAddressMode::REPEAT,
+            address_mode_v: vk::SamplerAddressMode::REPEAT,
+            address_mode_w: vk::SamplerAddressMode::REPEAT,
+            anisotropy_enable: vk::FALSE,
+            max_anisotropy: 1.0,
+            border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+            unnormalized_coordinates: vk::FALSE,
+            compare_enable: vk::FALSE,
+            compare_op: vk::CompareOp::ALWAYS,
+            mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+            mip_lod_bias: 0.0,
+            min_lod: 0.0,
+            max_lod: 0.0,
+            ..Default::default()
+        };
 
         unsafe { device.create_sampler(&sampler_info, None) }
     }
 
     fn create_descriptor_pool(device: &Device) -> Result<vk::DescriptorPool, vk::Result> {
-        let pool_size = vk::DescriptorPoolSize::default()
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1);
+        let pool_size = vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+        };
 
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(std::slice::from_ref(&pool_size))
-            .max_sets(1);
+        let pool_info = vk::DescriptorPoolCreateInfo {
+            pool_size_count: 1,
+            p_pool_sizes: &pool_size,
+            max_sets: 1,
+            ..Default::default()
+        };
 
         unsafe { device.create_descriptor_pool(&pool_info, None) }
     }
@@ -478,23 +498,31 @@ impl TextRenderer {
         texture_sampler: vk::Sampler,
     ) -> Result<Vec<vk::DescriptorSet>, vk::Result> {
         let layouts = [descriptor_set_layout];
-        let alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&layouts);
+        let alloc_info = vk::DescriptorSetAllocateInfo {
+            descriptor_pool,
+            descriptor_set_count: 1,
+            p_set_layouts: layouts.as_ptr(),
+            ..Default::default()
+        };
 
         let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info)? };
 
-        let image_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(texture_image_view)
-            .sampler(texture_sampler);
+        let image_info = vk::DescriptorImageInfo {
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            image_view: texture_image_view,
+            sampler: texture_sampler,
+            ..Default::default()
+        };
 
-        let descriptor_write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_sets[0])
-            .dst_binding(0)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&image_info));
+        let descriptor_write = vk::WriteDescriptorSet {
+            dst_set: descriptor_sets[0],
+            dst_binding: 0,
+            dst_array_element: 0,
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+            p_image_info: &image_info,
+            ..Default::default()
+        };
 
         unsafe {
             device.update_descriptor_sets(&[descriptor_write], &[]);
@@ -667,7 +695,7 @@ impl TextRenderer {
 
     pub fn cache_glyph(&mut self, ch: char) -> Result<(), Box<dyn std::error::Error>> {
         if !self.glyph_cache.contains_key(&ch) {
-            let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
+            let (metrics, _bitmap) = self.font.rasterize(ch, self.font_size);
             
             let glyph_info = GlyphInfo {
                 texture_id: 0,

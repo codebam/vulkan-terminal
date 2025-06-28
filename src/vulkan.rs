@@ -1,20 +1,20 @@
 use ash::vk;
 use ash::{Device, Entry, Instance};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use winit::window::Window;
 
 pub struct VulkanContext {
     pub entry: Entry,
     pub instance: Instance,
     pub surface: vk::SurfaceKHR,
-    pub surface_loader: ash::extensions::khr::Surface,
+    pub surface_loader: ash::khr::surface::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub device: Device,
     pub graphics_queue: vk::Queue,
     pub present_queue: vk::Queue,
     pub swapchain: vk::SwapchainKHR,
-    pub swapchain_loader: ash::extensions::khr::Swapchain,
+    pub swapchain_loader: ash::khr::swapchain::Device,
     pub swapchain_images: Vec<vk::Image>,
     pub swapchain_image_views: Vec<vk::ImageView>,
     pub swapchain_format: vk::Format,
@@ -38,12 +38,14 @@ impl VulkanContext {
         let app_name = CString::new("Vulkan Terminal")?;
         let engine_name = CString::new("No Engine")?;
         
-        let app_info = vk::ApplicationInfo::default()
-            .application_name(&app_name)
-            .application_version(vk::make_api_version(0, 1, 0, 0))
-            .engine_name(&engine_name)
-            .engine_version(vk::make_api_version(0, 1, 0, 0))
-            .api_version(vk::API_VERSION_1_0);
+        let app_info = vk::ApplicationInfo {
+            p_application_name: app_name.as_ptr(),
+            application_version: vk::make_api_version(0, 1, 0, 0),
+            p_engine_name: engine_name.as_ptr(),
+            engine_version: vk::make_api_version(0, 1, 0, 0),
+            api_version: vk::API_VERSION_1_0,
+            ..Default::default()
+        };
 
         let layer_names = vec![CString::new("VK_LAYER_KHRONOS_validation")?];
         let layers_names_raw: Vec<*const i8> = layer_names
@@ -51,15 +53,18 @@ impl VulkanContext {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let mut extension_names = ash_window::enumerate_required_extensions(
+        let extension_names = ash_window::enumerate_required_extensions(
             window.display_handle()?.as_raw()
         )?;
-        extension_names.push(ash::extensions::ext::DebugUtils::NAME.as_ptr());
 
-        let create_info = vk::InstanceCreateInfo::default()
-            .application_info(&app_info)
-            .enabled_layer_names(&layers_names_raw)
-            .enabled_extension_names(&extension_names);
+        let create_info = vk::InstanceCreateInfo {
+            p_application_info: &app_info,
+            enabled_layer_count: layers_names_raw.len() as u32,
+            pp_enabled_layer_names: layers_names_raw.as_ptr(),
+            enabled_extension_count: extension_names.len() as u32,
+            pp_enabled_extension_names: extension_names.as_ptr(),
+            ..Default::default()
+        };
 
         let instance = unsafe { entry.create_instance(&create_info, None)? };
 
@@ -73,7 +78,7 @@ impl VulkanContext {
             )?
         };
 
-        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
+        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
 
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
         let physical_device = physical_devices[0];
@@ -100,17 +105,24 @@ impl VulkanContext {
             .expect("Could not find suitable queue family") as u32;
 
         let queue_priorities = [1.0];
-        let queue_info = vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(graphics_queue_family_index)
-            .queue_priorities(&queue_priorities);
+        let queue_info = vk::DeviceQueueCreateInfo {
+            queue_family_index: graphics_queue_family_index,
+            queue_count: queue_priorities.len() as u32,
+            p_queue_priorities: queue_priorities.as_ptr(),
+            ..Default::default()
+        };
 
-        let device_extension_names_raw = [ash::extensions::khr::Swapchain::NAME.as_ptr()];
+        let device_extension_names_raw = [ash::khr::swapchain::NAME.as_ptr()];
         let features = vk::PhysicalDeviceFeatures::default();
 
-        let device_create_info = vk::DeviceCreateInfo::default()
-            .queue_create_infos(std::slice::from_ref(&queue_info))
-            .enabled_extension_names(&device_extension_names_raw)
-            .enabled_features(&features);
+        let device_create_info = vk::DeviceCreateInfo {
+            queue_create_info_count: 1,
+            p_queue_create_infos: &queue_info,
+            enabled_extension_count: device_extension_names_raw.len() as u32,
+            pp_enabled_extension_names: device_extension_names_raw.as_ptr(),
+            p_enabled_features: &features,
+            ..Default::default()
+        };
 
         let device = unsafe {
             instance.create_device(physical_device, &device_create_info, None)?
@@ -119,7 +131,7 @@ impl VulkanContext {
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family_index, 0) };
         let present_queue = graphics_queue;
 
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &device);
+        let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
 
         let surface_capabilities = unsafe {
             surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?
@@ -170,19 +182,21 @@ impl VulkanContext {
             image_count
         };
 
-        let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-            .surface(surface)
-            .min_image_count(image_count)
-            .image_format(surface_format.format)
-            .image_color_space(surface_format.color_space)
-            .image_extent(extent)
-            .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .pre_transform(surface_capabilities.current_transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
-            .clipped(true);
+        let swapchain_create_info = vk::SwapchainCreateInfoKHR {
+            surface,
+            min_image_count: image_count,
+            image_format: surface_format.format,
+            image_color_space: surface_format.color_space,
+            image_extent: extent,
+            image_array_layers: 1,
+            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            image_sharing_mode: vk::SharingMode::EXCLUSIVE,
+            pre_transform: surface_capabilities.current_transform,
+            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+            present_mode,
+            clipped: vk::TRUE,
+            ..Default::default()
+        };
 
         let swapchain = unsafe {
             swapchain_loader.create_swapchain(&swapchain_create_info, None)?
@@ -193,52 +207,67 @@ impl VulkanContext {
         let swapchain_image_views: Vec<vk::ImageView> = swapchain_images
             .iter()
             .map(|&image| {
-                let create_info = vk::ImageViewCreateInfo::default()
-                    .image(image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(surface_format.format)
-                    .subresource_range(vk::ImageSubresourceRange {
+                let create_info = vk::ImageViewCreateInfo {
+                    image,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    format: surface_format.format,
+                    subresource_range: vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
                         level_count: 1,
                         base_array_layer: 0,
                         layer_count: 1,
-                    });
+                    },
+                    ..Default::default()
+                };
 
                 unsafe { device.create_image_view(&create_info, None) }
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let color_attachment = vk::AttachmentDescription::default()
-            .format(surface_format.format)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+        let color_attachment = vk::AttachmentDescription {
+            format: surface_format.format,
+            samples: vk::SampleCountFlags::TYPE_1,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            ..Default::default()
+        };
 
-        let color_attachment_ref = vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let color_attachment_ref = vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
 
-        let subpass = vk::SubpassDescription::default()
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(std::slice::from_ref(&color_attachment_ref));
+        let subpass = vk::SubpassDescription {
+            pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
+            color_attachment_count: 1,
+            p_color_attachments: &color_attachment_ref,
+            ..Default::default()
+        };
 
-        let dependency = vk::SubpassDependency::default()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+        let dependency = vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            ..Default::default()
+        };
 
-        let render_pass_info = vk::RenderPassCreateInfo::default()
-            .attachments(std::slice::from_ref(&color_attachment))
-            .subpasses(std::slice::from_ref(&subpass))
-            .dependencies(std::slice::from_ref(&dependency));
+        let render_pass_info = vk::RenderPassCreateInfo {
+            attachment_count: 1,
+            p_attachments: &color_attachment,
+            subpass_count: 1,
+            p_subpasses: &subpass,
+            dependency_count: 1,
+            p_dependencies: &dependency,
+            ..Default::default()
+        };
 
         let render_pass = unsafe { device.create_render_pass(&render_pass_info, None)? };
 
@@ -246,32 +275,42 @@ impl VulkanContext {
             .iter()
             .map(|&image_view| {
                 let attachments = [image_view];
-                let framebuffer_info = vk::FramebufferCreateInfo::default()
-                    .render_pass(render_pass)
-                    .attachments(&attachments)
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(1);
+                let framebuffer_info = vk::FramebufferCreateInfo {
+                    render_pass,
+                    attachment_count: attachments.len() as u32,
+                    p_attachments: attachments.as_ptr(),
+                    width: extent.width,
+                    height: extent.height,
+                    layers: 1,
+                    ..Default::default()
+                };
 
                 unsafe { device.create_framebuffer(&framebuffer_info, None) }
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let command_pool_info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(graphics_queue_family_index);
+        let command_pool_info = vk::CommandPoolCreateInfo {
+            flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            queue_family_index: graphics_queue_family_index,
+            ..Default::default()
+        };
 
         let command_pool = unsafe { device.create_command_pool(&command_pool_info, None)? };
 
-        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32);
+        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: MAX_FRAMES_IN_FLIGHT as u32,
+            ..Default::default()
+        };
 
         let command_buffers = unsafe { device.allocate_command_buffers(&command_buffer_allocate_info)? };
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
-        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let fence_info = vk::FenceCreateInfo {
+            flags: vk::FenceCreateFlags::SIGNALED,
+            ..Default::default()
+        };
 
         let mut image_available_semaphores = Vec::new();
         let mut render_finished_semaphores = Vec::new();

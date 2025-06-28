@@ -233,7 +233,8 @@ impl TerminalState {
             '\r' | '\n' => {
                 self.newline();
                 self.execute_command();
-                self.write_str(&self.prompt);
+                let prompt = self.prompt.clone();
+                self.write_str(&prompt);
             }
             ch if ch.is_control() => {
             }
@@ -245,10 +246,10 @@ impl TerminalState {
     }
 
     fn execute_command(&mut self) {
-        let command = self.input_buffer.trim();
+        let command = self.input_buffer.trim().to_string();
         self.input_buffer.clear();
 
-        match command {
+        match command.as_str() {
             "" => {}
             "clear" => self.clear(),
             "help" => {
