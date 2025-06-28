@@ -26,6 +26,7 @@ pub struct VulkanContext {
     pub image_available_semaphores: Vec<vk::Semaphore>,
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
+    pub images_in_flight: Vec<Option<vk::Fence>>,
     pub current_frame: usize,
 }
 
@@ -324,6 +325,8 @@ impl VulkanContext {
             in_flight_fences.push(unsafe { device.create_fence(&fence_info, None)? });
         }
 
+        let images_in_flight = vec![None; swapchain_images.len()];
+
         Ok(VulkanContext {
             entry,
             instance,
@@ -346,11 +349,15 @@ impl VulkanContext {
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
+            images_in_flight,
             current_frame: 0,
         })
     }
 
-    pub fn draw_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn draw_frame<F>(&mut self, record_commands: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: FnOnce(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
+    {
         unsafe {
             self.device.wait_for_fences(
                 &[self.in_flight_fences[self.current_frame]],
@@ -365,8 +372,11 @@ impl VulkanContext {
                 vk::Fence::null(),
             )?;
 
-            self.device
-                .reset_fences(&[self.in_flight_fences[self.current_frame]])?;
+            if let Some(image_in_flight_fence) = self.images_in_flight[image_index as usize] {
+                self.device.wait_for_fences(&[image_in_flight_fence], true, u64::MAX)?;
+            }
+
+            self.images_in_flight[image_index as usize] = Some(self.in_flight_fences[self.current_frame]);
 
             self.device.reset_command_buffer(
                 self.command_buffers[self.current_frame],
@@ -376,6 +386,7 @@ impl VulkanContext {
             self.record_command_buffer(
                 self.command_buffers[self.current_frame],
                 image_index as usize,
+                record_commands,
             )?;
 
             let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
@@ -389,6 +400,9 @@ impl VulkanContext {
                 .command_buffers(&command_buffers)
                 .signal_semaphores(&signal_semaphores);
 
+            self.device
+                .reset_fences(&[self.in_flight_fences[self.current_frame]])?;
+
             self.device.queue_submit(
                 self.graphics_queue,
                 &[submit_info],
@@ -397,9 +411,10 @@ impl VulkanContext {
 
             let swapchains = [self.swapchain];
             let image_indices = [image_index];
+            let present_wait_semaphores = [self.render_finished_semaphores[self.current_frame]];
 
             let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(&signal_semaphores)
+                .wait_semaphores(&present_wait_semaphores)
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
@@ -412,11 +427,15 @@ impl VulkanContext {
         Ok(())
     }
 
-    fn record_command_buffer(
+    fn record_command_buffer<F>(
         &self,
         command_buffer: vk::CommandBuffer,
         image_index: usize,
-    ) -> Result<(), vk::Result> {
+        record_commands: F,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: FnOnce(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
+    {
         unsafe {
             let begin_info = vk::CommandBufferBeginInfo::default();
 
@@ -425,7 +444,7 @@ impl VulkanContext {
 
             let clear_values = [vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
+                    float32: [0.2, 0.3, 0.8, 1.0], // Blue color instead of black
                 },
             }];
 
@@ -443,6 +462,8 @@ impl VulkanContext {
                 &render_pass_info,
                 vk::SubpassContents::INLINE,
             );
+
+            record_commands(command_buffer)?;
 
             self.device.cmd_end_render_pass(command_buffer);
 

@@ -8,6 +8,6 @@ layout(location = 1) in vec4 fragColor;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    float alpha = texture(texSampler, fragTexCoord).r;
-    outColor = vec4(fragColor.rgb, fragColor.a * alpha);
+    // For now, just output the vertex color to make text visible
+    outColor = fragColor;
 }

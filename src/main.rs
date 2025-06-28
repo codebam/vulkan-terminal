@@ -50,6 +50,8 @@ impl VulkanTerminalApp {
                 vulkan_context.swapchain_extent,
                 vulkan_context.physical_device,
                 &vulkan_context.instance,
+                vulkan_context.command_pool,
+                vulkan_context.graphics_queue,
             )?;
 
             self.vulkan_context = Some(vulkan_context);
@@ -59,41 +61,9 @@ impl VulkanTerminalApp {
     }
 
     fn draw(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let (Some(vulkan_context), Some(text_renderer)) = 
-            (&mut self.vulkan_context, &mut self.text_renderer) {
-            
-            vulkan_context.draw_frame()?;
-            
-            let command_buffer = vulkan_context.command_buffers[vulkan_context.current_frame];
-            
-            let char_width = 8.0;
-            let char_height = 16.0;
-            let margin_x = 10.0;
-            let margin_y = 10.0;
-
-            for (y, row) in self.terminal_state.get_visible_cells().iter().enumerate() {
-                for (x, cell) in row.iter().enumerate() {
-                    if cell.character != ' ' {
-                        let screen_x = margin_x + (x as f32 * char_width);
-                        let screen_y = margin_y + (y as f32 * char_height);
-                        
-                        let color = if cell.bold {
-                            [cell.fg_color.r * 1.5, cell.fg_color.g * 1.5, cell.fg_color.b * 1.5, cell.fg_color.a]
-                        } else {
-                            cell.fg_color.as_array()
-                        };
-
-                        text_renderer.render_text(
-                            command_buffer,
-                            &cell.character.to_string(),
-                            screen_x,
-                            screen_y,
-                            color,
-                        )?;
-                    }
-                }
-            }
-
+        if let (Some(vulkan_context), Some(text_renderer)) =
+            (&mut self.vulkan_context, &mut self.text_renderer)
+        {
             let now = Instant::now();
             let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
             self.last_frame_time = now;
@@ -104,19 +74,132 @@ impl VulkanTerminalApp {
                 self.cursor_blink_timer = 0.0;
             }
 
-            if self.cursor_visible {
-                let (cursor_x, cursor_y) = self.terminal_state.get_cursor_position();
-                let screen_x = margin_x + (cursor_x as f32 * char_width);
-                let screen_y = margin_y + (cursor_y as f32 * char_height);
-                
-                text_renderer.render_text(
-                    command_buffer,
-                    "_",
-                    screen_x,
-                    screen_y,
-                    TerminalColor::WHITE.as_array(),
-                )?;
-            }
+            let terminal_state = &self.terminal_state;
+            let cursor_visible = self.cursor_visible;
+            let window_size = self.window.as_ref().unwrap().inner_size();
+            let screen_dimensions = [window_size.width as f32, window_size.height as f32];
+
+            vulkan_context.draw_frame(|command_buffer| {
+                let mut vertices = Vec::new();
+                let mut indices = Vec::new();
+
+                // Add the test triangle vertices
+                vertices.extend_from_slice(&[
+                    text_renderer::Vertex {
+                        position: [100.0, 100.0], // Top-left
+                        tex_coord: [0.0, 0.0],
+                        color: [1.0, 0.0, 0.0, 1.0], // Red
+                    },
+                    text_renderer::Vertex {
+                        position: [200.0, 100.0], // Top-right
+                        tex_coord: [1.0, 0.0],
+                        color: [0.0, 1.0, 0.0, 1.0], // Green
+                    },
+                    text_renderer::Vertex {
+                        position: [150.0, 200.0], // Bottom-center
+                        tex_coord: [0.5, 1.0],
+                        color: [0.0, 0.0, 1.0, 1.0], // Blue
+                    },
+                ]);
+                indices.extend_from_slice(&[0, 1, 2]);
+
+                // Render terminal content
+                let char_width = 9.0;
+                let char_height = 16.0;
+                let margin_x = 20.0;
+                let margin_y = 220.0;
+
+                for (y, row) in terminal_state.get_visible_cells().iter().enumerate() {
+                    for (x, cell) in row.iter().enumerate() {
+                        if cell.character != ' ' {
+                            text_renderer.cache_glyph(cell.character)?;
+                            let screen_x = margin_x + (x as f32 * char_width);
+                            let screen_y = margin_y + (y as f32 * char_height);
+                            text_renderer.render_text_to_buffer(
+                                &mut vertices,
+                                &mut indices,
+                                &cell.character.to_string(),
+                                screen_x,
+                                screen_y,
+                                [1.0, 1.0, 1.0, 1.0],
+                            )?;
+                        }
+                    }
+                }
+
+                // Render blinking cursor
+                if cursor_visible {
+                    text_renderer.cache_glyph('_')?;
+                    let (cursor_x, cursor_y) = terminal_state.get_cursor_position();
+                    let screen_x = margin_x + (cursor_x as f32 * char_width);
+                    let screen_y = margin_y + (cursor_y as f32 * char_height);
+                    text_renderer.render_text_to_buffer(
+                        &mut vertices,
+                        &mut indices,
+                        "_",
+                        screen_x,
+                        screen_y,
+                        [1.0, 0.0, 0.0, 1.0],
+                    )?;
+                }
+
+                // Update buffers and draw
+                if !vertices.is_empty() {
+                    text_renderer.update_vertex_buffer(&vertices)?;
+                    text_renderer.update_index_buffer(&indices)?;
+
+                    unsafe {
+                        text_renderer.device.cmd_bind_pipeline(
+                            command_buffer,
+                            ash::vk::PipelineBindPoint::GRAPHICS,
+                            text_renderer.graphics_pipeline,
+                        );
+
+                        text_renderer.device.cmd_bind_vertex_buffers(
+                            command_buffer,
+                            0,
+                            &[text_renderer.vertex_buffer],
+                            &[0],
+                        );
+
+                        text_renderer.device.cmd_bind_index_buffer(
+                            command_buffer,
+                            text_renderer.index_buffer,
+                            0,
+                            ash::vk::IndexType::UINT16,
+                        );
+
+                        text_renderer.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            ash::vk::PipelineBindPoint::GRAPHICS,
+                            text_renderer.pipeline_layout,
+                            0,
+                            &text_renderer.descriptor_sets,
+                            &[],
+                        );
+
+                        let push_constants = bytemuck::cast_slice(&screen_dimensions);
+                        text_renderer.device.cmd_push_constants(
+                            command_buffer,
+                            text_renderer.pipeline_layout,
+                            ash::vk::ShaderStageFlags::VERTEX,
+                            0,
+                            push_constants,
+                        );
+
+                        text_renderer.device.cmd_draw_indexed(
+                            command_buffer,
+                            indices.len() as u32,
+                            1,
+                            0,
+                            0,
+                            0,
+                        );
+                    }
+                }
+
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -208,6 +291,16 @@ impl VulkanTerminalApp {
         let terminal_height = ((height as f32 - margin_y) / char_height) as usize;
 
         self.terminal_state.resize(terminal_width.max(1), terminal_height.max(1));
+    }
+}
+
+impl Drop for VulkanTerminalApp {
+    fn drop(&mut self) {
+        if let Some(vulkan_context) = self.vulkan_context.take() {
+            unsafe {
+                vulkan_context.device.device_wait_idle().unwrap();
+            }
+        }
     }
 }
 
