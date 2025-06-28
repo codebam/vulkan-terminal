@@ -19,7 +19,6 @@
           rustc
           rust-analyzer
           rustfmt
-          openssl
           pkg-config
         ];
       };
