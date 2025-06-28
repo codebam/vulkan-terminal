@@ -7,6 +7,12 @@ use std::mem;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct PushConstants {
+    pub screen_dimensions: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 2],
     pub tex_coord: [f32; 2],
@@ -73,6 +79,11 @@ pub struct TextRenderer {
     pub texture_sampler: vk::Sampler,
     pub descriptor_pool: vk::DescriptorPool,
     pub descriptor_sets: Vec<vk::DescriptorSet>,
+    pub atlas_width: u32,
+    pub atlas_height: u32,
+    pub atlas_x: u32,
+    pub atlas_y: u32,
+    pub atlas_data: Vec<u8>,
 }
 
 impl TextRenderer {
@@ -85,7 +96,7 @@ impl TextRenderer {
         command_pool: vk::CommandPool,
         graphics_queue: vk::Queue,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let font_data = include_bytes!("../assets/DejaVuSansMono.ttf");
+        let font_data = include_bytes!("/home/codebam/Documents/rust/vulkan-terminal/result/share/fonts/truetype/NerdFonts/FiraCode/FiraCodeNerdFont-Regular.ttf");
         let font = Font::from_bytes(font_data as &[u8], FontSettings::default())?;
         let font_size = 16.0;
 
@@ -109,10 +120,16 @@ impl TextRenderer {
             instance,
         )?;
 
+        let atlas_width = 1024;
+        let atlas_height = 1024;
+        let atlas_data = vec![0; (atlas_width * atlas_height) as usize];
+
         let (texture_image, texture_image_memory) = Self::create_texture_image(
             &device,
             physical_device,
             instance,
+            atlas_width,
+            atlas_height,
         )?;
 
         let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
@@ -127,10 +144,7 @@ impl TextRenderer {
             texture_sampler,
         )?;
 
-        // Initialize the texture with white data and transition layout
-        Self::initialize_texture_with_data(&device, texture_image, texture_image_memory, command_pool, graphics_queue, physical_device, instance)?;
-
-        Ok(TextRenderer {
+        let mut text_renderer = TextRenderer {
             font,
             glyph_cache: HashMap::new(),
             font_size,
@@ -148,7 +162,16 @@ impl TextRenderer {
             texture_sampler,
             descriptor_pool,
             descriptor_sets,
-        })
+            atlas_width,
+            atlas_height,
+            atlas_x: 0,
+            atlas_y: 0,
+            atlas_data,
+        };
+
+        text_renderer.initialize_texture(command_pool, graphics_queue, physical_device, instance)?;
+
+        Ok(text_renderer)
     }
 
     fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, vk::Result> {
@@ -255,7 +278,7 @@ impl TextRenderer {
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
-            .size(std::mem::size_of::<[f32; 2]>() as u32);
+            .size(std::mem::size_of::<PushConstants>() as u32);
 
         let set_layouts = [descriptor_set_layout];
         let push_constant_ranges = [push_constant_range];
@@ -301,7 +324,14 @@ impl TextRenderer {
         device: &Device,
         code: &[u8],
     ) -> Result<vk::ShaderModule, vk::Result> {
-        let code = bytemuck::cast_slice(code);
+        let mut align_code = Vec::with_capacity(code.len());
+        align_code.extend_from_slice(code);
+
+        let (prefix, code, suffix) = unsafe { align_code.align_to::<u32>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+        }
+
         let create_info = vk::ShaderModuleCreateInfo::default().code(code);
 
         unsafe { device.create_shader_module(&create_info, None) }
@@ -393,9 +423,9 @@ impl TextRenderer {
         device: &Device,
         physical_device: vk::PhysicalDevice,
         instance: &ash::Instance,
+        width: u32,
+        height: u32,
     ) -> Result<(vk::Image, vk::DeviceMemory), Box<dyn std::error::Error>> {
-        let width = 1024;
-        let height = 1024;
 
         let image_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
@@ -543,73 +573,14 @@ impl TextRenderer {
         Ok(descriptor_sets)
     }
     
-    fn initialize_texture_with_data(
-        device: &Device,
-        image: vk::Image,
-        image_memory: vk::DeviceMemory,
+    fn initialize_texture(
+        &mut self,
         command_pool: vk::CommandPool,
         graphics_queue: vk::Queue,
         physical_device: vk::PhysicalDevice,
         instance: &ash::Instance,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let width = 1024_u32;
-        let height = 1024_u32;
-        let image_size = (width * height) as usize;
-        
-        // Create a simple white texture
-        let pixels = vec![255u8; image_size];
-        
-        // Create staging buffer
-        let buffer_info = vk::BufferCreateInfo {
-            size: image_size as vk::DeviceSize,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        
-        let staging_buffer = unsafe { device.create_buffer(&buffer_info, None)? };
-        let mem_requirements = unsafe { device.get_buffer_memory_requirements(staging_buffer) };
-        
-        let mem_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
-        
-        let memory_type_index = Self::find_memory_type(
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            &mem_properties,
-        )?;
-        
-        let alloc_info = vk::MemoryAllocateInfo {
-            allocation_size: mem_requirements.size,
-            memory_type_index,
-            ..Default::default()
-        };
-        
-        let staging_buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
-        unsafe { device.bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)? };
-        
-        // Upload pixel data to staging buffer
-        unsafe {
-            let data_ptr = device.map_memory(
-                staging_buffer_memory,
-                0,
-                image_size as vk::DeviceSize,
-                vk::MemoryMapFlags::empty(),
-            )?;
-            std::ptr::copy_nonoverlapping(pixels.as_ptr(), data_ptr as *mut u8, image_size);
-            device.unmap_memory(staging_buffer_memory);
-        }
-        
-        // Transition image layout and copy data
-        Self::transition_image_and_copy_data(device, image, staging_buffer, command_pool, graphics_queue, width, height)?;
-        
-        // Cleanup staging buffer
-        unsafe {
-            device.destroy_buffer(staging_buffer, None);
-            device.free_memory(staging_buffer_memory, None);
-        }
-        
+        self.update_texture(command_pool, graphics_queue, physical_device, instance)?;
         Ok(())
     }
     
@@ -749,6 +720,69 @@ impl TextRenderer {
         Ok(())
     }
 
+    fn update_texture(
+        &self,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let image_size = (self.atlas_width * self.atlas_height) as usize;
+        
+        // Create staging buffer
+        let buffer_info = vk::BufferCreateInfo {
+            size: image_size as vk::DeviceSize,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
+        
+        let staging_buffer = unsafe { self.device.create_buffer(&buffer_info, None)? };
+        let mem_requirements = unsafe { self.device.get_buffer_memory_requirements(staging_buffer) };
+        
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+        
+        let memory_type_index = Self::find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &mem_properties,
+        )?;
+        
+        let alloc_info = vk::MemoryAllocateInfo {
+            allocation_size: mem_requirements.size,
+            memory_type_index,
+            ..Default::default()
+        };
+        
+        let staging_buffer_memory = unsafe { self.device.allocate_memory(&alloc_info, None)? };
+        unsafe { self.device.bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)? };
+        
+        // Upload pixel data to staging buffer
+        unsafe {
+            let data_ptr = self.device.map_memory(
+                staging_buffer_memory,
+                0,
+                image_size as vk::DeviceSize,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(self.atlas_data.as_ptr(), data_ptr as *mut u8, image_size);
+            self.device.unmap_memory(staging_buffer_memory);
+        }
+        
+        // Transition image layout and copy data
+        Self::transition_image_and_copy_data(&self.device, self.texture_image, staging_buffer, command_pool, graphics_queue, self.atlas_width, self.atlas_height)?;
+        
+        // Cleanup staging buffer
+        unsafe {
+            self.device.destroy_buffer(staging_buffer, None);
+            self.device.free_memory(staging_buffer_memory, None);
+        }
+        
+        Ok(())
+    }
+
     fn find_memory_type(
         type_filter: u32,
         properties: vk::MemoryPropertyFlags,
@@ -773,38 +807,53 @@ impl TextRenderer {
         x: f32,
         y: f32,
         color: [f32; 4],
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut current_x = x;
+        let mut texture_updated = false;
 
         for ch in text.chars() {
+            if !self.glyph_cache.contains_key(&ch) {
+                self.cache_glyph(ch)?;
+                texture_updated = true;
+            }
+
             if let Some(glyph_info) = self.glyph_cache.get(&ch) {
-                let x_pos = current_x;
-                let y_pos = y;
+                let x_pos = current_x + glyph_info.bearing_x as f32;
+                let y_pos = y - (glyph_info.height as i32 - glyph_info.bearing_y) as f32;
 
                 let w = glyph_info.width as f32;
                 let h = glyph_info.height as f32;
+
+                let u0 = glyph_info.texture_id as f32 / self.atlas_width as f32;
+                let v0 = 0.0;
+                let u1 = (glyph_info.texture_id + glyph_info.width) as f32 / self.atlas_width as f32;
+                let v1 = glyph_info.height as f32 / self.atlas_height as f32;
 
                 let index_offset = vertices.len() as u16;
 
                 vertices.extend_from_slice(&[
                     Vertex {
                         position: [x_pos, y_pos + h],
-                        tex_coord: [0.0, 0.0],
+                        tex_coord: [u0, v1],
                         color,
                     },
                     Vertex {
                         position: [x_pos, y_pos],
-                        tex_coord: [0.0, 1.0],
+                        tex_coord: [u0, v0],
                         color,
                     },
                     Vertex {
                         position: [x_pos + w, y_pos],
-                        tex_coord: [1.0, 1.0],
+                        tex_coord: [u1, v0],
                         color,
                     },
                     Vertex {
                         position: [x_pos + w, y_pos + h],
-                        tex_coord: [1.0, 0.0],
+                        tex_coord: [u1, v1],
                         color,
                     },
                 ]);
@@ -820,6 +869,10 @@ impl TextRenderer {
 
                 current_x += glyph_info.advance;
             }
+        }
+
+        if texture_updated {
+            self.update_texture(command_pool, graphics_queue, physical_device, instance)?;
         }
 
         Ok(())
@@ -865,10 +918,28 @@ impl TextRenderer {
 
     pub fn cache_glyph(&mut self, ch: char) -> Result<(), Box<dyn std::error::Error>> {
         if !self.glyph_cache.contains_key(&ch) {
-            let (metrics, _bitmap) = self.font.rasterize(ch, self.font_size);
-            
+            let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
+
+            if self.atlas_x + metrics.width as u32 > self.atlas_width {
+                self.atlas_x = 0;
+                self.atlas_y += self.font_size as u32;
+            }
+
+            if self.atlas_y + metrics.height as u32 > self.atlas_height {
+                return Err("Font atlas is full".into());
+            }
+
+            for y in 0..metrics.height {
+                for x in 0..metrics.width {
+                    let index =
+                        ((self.atlas_y + y as u32) * self.atlas_width + (self.atlas_x + x as u32))
+                            as usize;
+                    self.atlas_data[index] = bitmap[y * metrics.width + x];
+                }
+            }
+
             let glyph_info = GlyphInfo {
-                texture_id: 0,
+                texture_id: self.atlas_x,
                 width: metrics.width as u32,
                 height: metrics.height as u32,
                 bearing_x: metrics.xmin,
@@ -877,6 +948,7 @@ impl TextRenderer {
             };
 
             self.glyph_cache.insert(ch, glyph_info);
+            self.atlas_x += metrics.width as u32;
         }
         Ok(())
     }

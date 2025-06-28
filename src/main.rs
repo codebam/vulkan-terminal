@@ -79,6 +79,11 @@ impl VulkanTerminalApp {
             let window_size = self.window.as_ref().unwrap().inner_size();
             let screen_dimensions = [window_size.width as f32, window_size.height as f32];
 
+            let command_pool = vulkan_context.command_pool;
+            let graphics_queue = vulkan_context.graphics_queue;
+            let physical_device = vulkan_context.physical_device;
+            let instance = vulkan_context.instance.clone();
+
             vulkan_context.draw_frame(|command_buffer| {
                 let mut vertices = Vec::new();
                 let mut indices = Vec::new();
@@ -112,7 +117,6 @@ impl VulkanTerminalApp {
                 for (y, row) in terminal_state.get_visible_cells().iter().enumerate() {
                     for (x, cell) in row.iter().enumerate() {
                         if cell.character != ' ' {
-                            text_renderer.cache_glyph(cell.character)?;
                             let screen_x = margin_x + (x as f32 * char_width);
                             let screen_y = margin_y + (y as f32 * char_height);
                             text_renderer.render_text_to_buffer(
@@ -122,6 +126,10 @@ impl VulkanTerminalApp {
                                 screen_x,
                                 screen_y,
                                 [1.0, 1.0, 1.0, 1.0],
+                                command_pool,
+                                graphics_queue,
+                                physical_device,
+                                &instance,
                             )?;
                         }
                     }
@@ -129,7 +137,6 @@ impl VulkanTerminalApp {
 
                 // Render blinking cursor
                 if cursor_visible {
-                    text_renderer.cache_glyph('_')?;
                     let (cursor_x, cursor_y) = terminal_state.get_cursor_position();
                     let screen_x = margin_x + (cursor_x as f32 * char_width);
                     let screen_y = margin_y + (cursor_y as f32 * char_height);
@@ -140,6 +147,10 @@ impl VulkanTerminalApp {
                         screen_x,
                         screen_y,
                         [1.0, 0.0, 0.0, 1.0],
+                        command_pool,
+                        graphics_queue,
+                        physical_device,
+                        &instance,
                     )?;
                 }
 
@@ -178,13 +189,21 @@ impl VulkanTerminalApp {
                             &[],
                         );
 
-                        let push_constants = bytemuck::cast_slice(&screen_dimensions);
+                        let push_constants = text_renderer::PushConstants {
+                            screen_dimensions,
+                        };
+                        let push_constants_bytes = unsafe {
+                            std::slice::from_raw_parts(
+                                &push_constants as *const _ as *const u8,
+                                std::mem::size_of::<text_renderer::PushConstants>(),
+                            )
+                        };
                         text_renderer.device.cmd_push_constants(
                             command_buffer,
                             text_renderer.pipeline_layout,
                             ash::vk::ShaderStageFlags::VERTEX,
                             0,
-                            push_constants,
+                            push_constants_bytes,
                         );
 
                         text_renderer.device.cmd_draw_indexed(
