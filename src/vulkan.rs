@@ -316,6 +316,7 @@ impl VulkanContext {
         let mut image_available_semaphores = Vec::new();
         let mut render_finished_semaphores = Vec::new();
         let mut in_flight_fences = Vec::new();
+        let images_in_flight: Vec<Option<vk::Fence>> = vec![None; swapchain_images.len()];
 
         for _ in 0..MAX_FRAMES_IN_FLIGHT {
             image_available_semaphores
@@ -324,8 +325,6 @@ impl VulkanContext {
                 .push(unsafe { device.create_semaphore(&semaphore_info, None)? });
             in_flight_fences.push(unsafe { device.create_fence(&fence_info, None)? });
         }
-
-        let images_in_flight = vec![None; swapchain_images.len()];
 
         Ok(VulkanContext {
             entry,
@@ -354,29 +353,35 @@ impl VulkanContext {
         })
     }
 
-    pub fn draw_frame<F>(&mut self, record_commands: F) -> Result<(), Box<dyn std::error::Error>>
+    pub fn draw_frame<F>(&mut self, mut record_commands: F) -> Result<(), Box<dyn std::error::Error>>
     where
-        F: FnOnce(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
+        F: FnMut(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
     {
         unsafe {
-            self.device.wait_for_fences(
-                &[self.in_flight_fences[self.current_frame]],
-                true,
-                u64::MAX,
-            )?;
+            let fence = self.in_flight_fences[self.current_frame];
+            self.device.wait_for_fences(&[fence], true, u64::MAX)?;
 
-            let (image_index, _) = self.swapchain_loader.acquire_next_image(
+            let result = self.swapchain_loader.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
                 self.image_available_semaphores[self.current_frame],
                 vk::Fence::null(),
-            )?;
+            );
+
+            let image_index = match result {
+                Ok((image_index, _)) => image_index,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    // Handle swapchain recreation here if needed
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             if let Some(image_in_flight_fence) = self.images_in_flight[image_index as usize] {
                 self.device.wait_for_fences(&[image_in_flight_fence], true, u64::MAX)?;
             }
 
-            self.images_in_flight[image_index as usize] = Some(self.in_flight_fences[self.current_frame]);
+            self.images_in_flight[image_index as usize] = Some(fence);
 
             self.device.reset_command_buffer(
                 self.command_buffers[self.current_frame],
@@ -386,7 +391,7 @@ impl VulkanContext {
             self.record_command_buffer(
                 self.command_buffers[self.current_frame],
                 image_index as usize,
-                record_commands,
+                &mut record_commands,
             )?;
 
             let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
@@ -400,13 +405,12 @@ impl VulkanContext {
                 .command_buffers(&command_buffers)
                 .signal_semaphores(&signal_semaphores);
 
-            self.device
-                .reset_fences(&[self.in_flight_fences[self.current_frame]])?;
+            self.device.reset_fences(&[fence])?;
 
             self.device.queue_submit(
                 self.graphics_queue,
                 &[submit_info],
-                self.in_flight_fences[self.current_frame],
+                fence,
             )?;
 
             let swapchains = [self.swapchain];
@@ -418,8 +422,16 @@ impl VulkanContext {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            self.swapchain_loader
-                .queue_present(self.present_queue, &present_info)?;
+            let result = self.swapchain_loader
+                .queue_present(self.present_queue, &present_info);
+
+            match result {
+                Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    // Handle swapchain recreation here if needed
+                }
+                Err(e) => return Err(e.into()),
+                _ => {}
+            }
 
             self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
@@ -431,10 +443,10 @@ impl VulkanContext {
         &self,
         command_buffer: vk::CommandBuffer,
         image_index: usize,
-        record_commands: F,
+        record_commands: &mut F,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        F: FnOnce(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
+        F: FnMut(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
     {
         unsafe {
             let begin_info = vk::CommandBufferBeginInfo::default();
