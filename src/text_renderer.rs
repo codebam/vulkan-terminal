@@ -1,0 +1,704 @@
+use ash::vk;
+use ash::Device;
+use bytemuck::{Pod, Zeroable};
+use fontdue::{Font, FontSettings};
+use std::collections::HashMap;
+use std::mem;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct Vertex {
+    pub position: [f32; 2],
+    pub tex_coord: [f32; 2],
+    pub color: [f32; 4],
+}
+
+impl Vertex {
+    pub fn binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: mem::size_of::<Self>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }
+    }
+
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        [
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: memoffset::offset_of!(Self, position) as u32,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 1,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: memoffset::offset_of!(Self, tex_coord) as u32,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 2,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                offset: memoffset::offset_of!(Self, color) as u32,
+            },
+        ]
+    }
+}
+
+pub struct GlyphInfo {
+    pub texture_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub bearing_x: i32,
+    pub bearing_y: i32,
+    pub advance: f32,
+}
+
+pub struct TextRenderer {
+    pub font: Font,
+    pub glyph_cache: HashMap<char, GlyphInfo>,
+    pub font_size: f32,
+    pub device: Device,
+    pub graphics_pipeline: vk::Pipeline,
+    pub pipeline_layout: vk::PipelineLayout,
+    pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub vertex_buffer: vk::Buffer,
+    pub vertex_buffer_memory: vk::DeviceMemory,
+    pub index_buffer: vk::Buffer,
+    pub index_buffer_memory: vk::DeviceMemory,
+    pub texture_image: vk::Image,
+    pub texture_image_memory: vk::DeviceMemory,
+    pub texture_image_view: vk::ImageView,
+    pub texture_sampler: vk::Sampler,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub descriptor_sets: Vec<vk::DescriptorSet>,
+}
+
+impl TextRenderer {
+    pub fn new(
+        device: Device,
+        render_pass: vk::RenderPass,
+        extent: vk::Extent2D,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let font_data = include_bytes!("../assets/DejaVuSansMono.ttf");
+        let font = Font::from_bytes(font_data as &[u8], FontSettings::default())?;
+        let font_size = 16.0;
+
+        let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
+        let (graphics_pipeline, pipeline_layout) = Self::create_graphics_pipeline(
+            &device,
+            render_pass,
+            extent,
+            descriptor_set_layout,
+        )?;
+
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
+            &device,
+            physical_device,
+            instance,
+        )?;
+
+        let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
+            &device,
+            physical_device,
+            instance,
+        )?;
+
+        let (texture_image, texture_image_memory) = Self::create_texture_image(
+            &device,
+            physical_device,
+            instance,
+        )?;
+
+        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
+        let texture_sampler = Self::create_texture_sampler(&device)?;
+
+        let descriptor_pool = Self::create_descriptor_pool(&device)?;
+        let descriptor_sets = Self::create_descriptor_sets(
+            &device,
+            descriptor_pool,
+            descriptor_set_layout,
+            texture_image_view,
+            texture_sampler,
+        )?;
+
+        Ok(TextRenderer {
+            font,
+            glyph_cache: HashMap::new(),
+            font_size,
+            device,
+            graphics_pipeline,
+            pipeline_layout,
+            descriptor_set_layout,
+            vertex_buffer,
+            vertex_buffer_memory,
+            index_buffer,
+            index_buffer_memory,
+            texture_image,
+            texture_image_memory,
+            texture_image_view,
+            texture_sampler,
+            descriptor_pool,
+            descriptor_sets,
+        })
+    }
+
+    fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, vk::Result> {
+        let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let bindings = [sampler_layout_binding];
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+        unsafe { device.create_descriptor_set_layout(&layout_info, None) }
+    }
+
+    fn create_graphics_pipeline(
+        device: &Device,
+        render_pass: vk::RenderPass,
+        extent: vk::Extent2D,
+        descriptor_set_layout: vk::DescriptorSetLayout,
+    ) -> Result<(vk::Pipeline, vk::PipelineLayout), Box<dyn std::error::Error>> {
+        let vert_shader_code = include_bytes!("../shaders/text.vert.spv");
+        let frag_shader_code = include_bytes!("../shaders/text.frag.spv");
+
+        let vert_shader_module = Self::create_shader_module(device, vert_shader_code)?;
+        let frag_shader_module = Self::create_shader_module(device, frag_shader_code)?;
+
+        let main_function_name = std::ffi::CString::new("main")?;
+
+        let vert_stage_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vert_shader_module)
+            .name(&main_function_name);
+
+        let frag_stage_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(frag_shader_module)
+            .name(&main_function_name);
+
+        let shader_stages = [vert_stage_info, frag_stage_info];
+
+        let binding_description = Vertex::binding_description();
+        let attribute_descriptions = Vertex::attribute_descriptions();
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(std::slice::from_ref(&binding_description))
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        let viewports = [viewport];
+        let scissors = [scissor];
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::COPY)
+            .attachments(std::slice::from_ref(&color_blend_attachment))
+            .blend_constants([0.0, 0.0, 0.0, 0.0]);
+
+        let set_layouts = [descriptor_set_layout];
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts);
+
+        let pipeline_layout = unsafe {
+            device.create_pipeline_layout(&pipeline_layout_info, None)?
+        };
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .layout(pipeline_layout)
+            .render_pass(render_pass)
+            .subpass(0);
+
+        let graphics_pipeline = unsafe {
+            device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[pipeline_info],
+                    None,
+                )
+                .map_err(|(_, err)| err)?[0]
+        };
+
+        unsafe {
+            device.destroy_shader_module(vert_shader_module, None);
+            device.destroy_shader_module(frag_shader_module, None);
+        }
+
+        Ok((graphics_pipeline, pipeline_layout))
+    }
+
+    fn create_shader_module(
+        device: &Device,
+        code: &[u8],
+    ) -> Result<vk::ShaderModule, vk::Result> {
+        let code = bytemuck::cast_slice(code);
+        let create_info = vk::ShaderModuleCreateInfo::default().code(code);
+
+        unsafe { device.create_shader_module(&create_info, None) }
+    }
+
+    fn create_vertex_buffer(
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
+    ) -> Result<(vk::Buffer, vk::DeviceMemory), Box<dyn std::error::Error>> {
+        let buffer_size = (mem::size_of::<Vertex>() * 1024) as vk::DeviceSize;
+
+        let buffer_info = vk::BufferCreateInfo::default()
+            .size(buffer_size)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
+
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+
+        let memory_type_index = Self::find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &mem_properties,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(memory_type_index);
+
+        let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
+
+        unsafe { device.bind_buffer_memory(buffer, buffer_memory, 0)? };
+
+        Ok((buffer, buffer_memory))
+    }
+
+    fn create_index_buffer(
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
+    ) -> Result<(vk::Buffer, vk::DeviceMemory), Box<dyn std::error::Error>> {
+        let buffer_size = (mem::size_of::<u16>() * 6144) as vk::DeviceSize;
+
+        let buffer_info = vk::BufferCreateInfo::default()
+            .size(buffer_size)
+            .usage(vk::BufferUsageFlags::INDEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
+
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+
+        let memory_type_index = Self::find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &mem_properties,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(memory_type_index);
+
+        let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
+
+        unsafe { device.bind_buffer_memory(buffer, buffer_memory, 0)? };
+
+        Ok((buffer, buffer_memory))
+    }
+
+    fn create_texture_image(
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        instance: &ash::Instance,
+    ) -> Result<(vk::Image, vk::DeviceMemory), Box<dyn std::error::Error>> {
+        let width = 1024;
+        let height = 1024;
+
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8_UNORM)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+
+        let image = unsafe { device.create_image(&image_info, None)? };
+
+        let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+
+        let memory_type_index = Self::find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            &mem_properties,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(memory_type_index);
+
+        let image_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
+
+        unsafe { device.bind_image_memory(image, image_memory, 0)? };
+
+        Ok((image, image_memory))
+    }
+
+    fn create_texture_image_view(
+        device: &Device,
+        texture_image: vk::Image,
+    ) -> Result<vk::ImageView, vk::Result> {
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(texture_image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(vk::Format::R8_UNORM)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        unsafe { device.create_image_view(&view_info, None) }
+    }
+
+    fn create_texture_sampler(device: &Device) -> Result<vk::Sampler, vk::Result> {
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(false)
+            .max_anisotropy(1.0)
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(0.0);
+
+        unsafe { device.create_sampler(&sampler_info, None) }
+    }
+
+    fn create_descriptor_pool(device: &Device) -> Result<vk::DescriptorPool, vk::Result> {
+        let pool_size = vk::DescriptorPoolSize::default()
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1);
+
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(std::slice::from_ref(&pool_size))
+            .max_sets(1);
+
+        unsafe { device.create_descriptor_pool(&pool_info, None) }
+    }
+
+    fn create_descriptor_sets(
+        device: &Device,
+        descriptor_pool: vk::DescriptorPool,
+        descriptor_set_layout: vk::DescriptorSetLayout,
+        texture_image_view: vk::ImageView,
+        texture_sampler: vk::Sampler,
+    ) -> Result<Vec<vk::DescriptorSet>, vk::Result> {
+        let layouts = [descriptor_set_layout];
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&layouts);
+
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info)? };
+
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(texture_image_view)
+            .sampler(texture_sampler);
+
+        let descriptor_write = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_sets[0])
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info));
+
+        unsafe {
+            device.update_descriptor_sets(&[descriptor_write], &[]);
+        }
+
+        Ok(descriptor_sets)
+    }
+
+    fn find_memory_type(
+        type_filter: u32,
+        properties: vk::MemoryPropertyFlags,
+        mem_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) -> Result<u32, Box<dyn std::error::Error>> {
+        for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
+            if (type_filter & (1 << i)) != 0
+                && memory_type.property_flags.contains(properties)
+            {
+                return Ok(i as u32);
+            }
+        }
+
+        Err("Failed to find suitable memory type".into())
+    }
+
+    pub fn render_text(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        text: &str,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut current_x = x;
+
+        for ch in text.chars() {
+            if let Some(glyph_info) = self.glyph_cache.get(&ch) {
+                let x_pos = current_x + glyph_info.bearing_x as f32;
+                let y_pos = y - (glyph_info.height as f32 - glyph_info.bearing_y as f32);
+
+                let w = glyph_info.width as f32;
+                let h = glyph_info.height as f32;
+
+                let index_offset = vertices.len() as u16;
+
+                vertices.extend_from_slice(&[
+                    Vertex {
+                        position: [x_pos, y_pos + h],
+                        tex_coord: [0.0, 0.0],
+                        color,
+                    },
+                    Vertex {
+                        position: [x_pos, y_pos],
+                        tex_coord: [0.0, 1.0],
+                        color,
+                    },
+                    Vertex {
+                        position: [x_pos + w, y_pos],
+                        tex_coord: [1.0, 1.0],
+                        color,
+                    },
+                    Vertex {
+                        position: [x_pos + w, y_pos + h],
+                        tex_coord: [1.0, 0.0],
+                        color,
+                    },
+                ]);
+
+                indices.extend_from_slice(&[
+                    index_offset,
+                    index_offset + 1,
+                    index_offset + 2,
+                    index_offset + 2,
+                    index_offset + 3,
+                    index_offset,
+                ]);
+
+                current_x += glyph_info.advance;
+            }
+        }
+
+        if !vertices.is_empty() {
+            self.update_vertex_buffer(&vertices)?;
+            self.update_index_buffer(&indices)?;
+
+            unsafe {
+                self.device.cmd_bind_pipeline(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.graphics_pipeline,
+                );
+
+                self.device.cmd_bind_vertex_buffers(
+                    command_buffer,
+                    0,
+                    &[self.vertex_buffer],
+                    &[0],
+                );
+
+                self.device.cmd_bind_index_buffer(
+                    command_buffer,
+                    self.index_buffer,
+                    0,
+                    vk::IndexType::UINT16,
+                );
+
+                self.device.cmd_bind_descriptor_sets(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    &self.descriptor_sets,
+                    &[],
+                );
+
+                self.device.cmd_draw_indexed(
+                    command_buffer,
+                    indices.len() as u32,
+                    1,
+                    0,
+                    0,
+                    0,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_vertex_buffer(&self, vertices: &[Vertex]) -> Result<(), vk::Result> {
+        let data_size = (vertices.len() * mem::size_of::<Vertex>()) as vk::DeviceSize;
+
+        unsafe {
+            let data_ptr = self.device.map_memory(
+                self.vertex_buffer_memory,
+                0,
+                data_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+
+            let mut align = ash::util::Align::new(data_ptr, mem::align_of::<Vertex>() as u64, data_size);
+            align.copy_from_slice(vertices);
+
+            self.device.unmap_memory(self.vertex_buffer_memory);
+        }
+
+        Ok(())
+    }
+
+    fn update_index_buffer(&self, indices: &[u16]) -> Result<(), vk::Result> {
+        let data_size = (indices.len() * mem::size_of::<u16>()) as vk::DeviceSize;
+
+        unsafe {
+            let data_ptr = self.device.map_memory(
+                self.index_buffer_memory,
+                0,
+                data_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+
+            let mut align = ash::util::Align::new(data_ptr, mem::align_of::<u16>() as u64, data_size);
+            align.copy_from_slice(indices);
+
+            self.device.unmap_memory(self.index_buffer_memory);
+        }
+
+        Ok(())
+    }
+
+    pub fn cache_glyph(&mut self, ch: char) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.glyph_cache.contains_key(&ch) {
+            let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
+            
+            let glyph_info = GlyphInfo {
+                texture_id: 0,
+                width: metrics.width as u32,
+                height: metrics.height as u32,
+                bearing_x: metrics.xmin,
+                bearing_y: metrics.ymin,
+                advance: metrics.advance_width,
+            };
+
+            self.glyph_cache.insert(ch, glyph_info);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TextRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device.destroy_sampler(self.texture_sampler, None);
+            self.device.destroy_image_view(self.texture_image_view, None);
+            self.device.destroy_image(self.texture_image, None);
+            self.device.free_memory(self.texture_image_memory, None);
+            self.device.destroy_buffer(self.index_buffer, None);
+            self.device.free_memory(self.index_buffer_memory, None);
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.device.free_memory(self.vertex_buffer_memory, None);
+            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.destroy_pipeline(self.graphics_pipeline, None);
+            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+        }
+    }
+}
