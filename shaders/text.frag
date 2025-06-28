@@ -8,6 +8,9 @@ layout(location = 1) in vec4 fragColor;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // For now, just output the vertex color to make text visible
-    outColor = fragColor;
+    // Sample the texture to get the alpha value of the glyph
+    float alpha = texture(texSampler, fragTexCoord).r;
+    
+    // Combine the glyph's alpha with the desired text color
+    outColor = vec4(fragColor.rgb, fragColor.a * alpha);
 }
