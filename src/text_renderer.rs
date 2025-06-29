@@ -823,16 +823,16 @@ impl TextRenderer {
 
             if let Some(glyph_info) = self.glyph_cache.get(&ch) {
                 let x_pos = current_x + glyph_info.bearing_x as f32;
-                let y_pos = y - (glyph_info.height as i32 - glyph_info.bearing_y) as f32;
+                let y_pos = y - glyph_info.bearing_y as f32;
 
                 let w = glyph_info.width as f32;
                 let h = glyph_info.height as f32;
 
                 let u0 = glyph_info.texture_id as f32 / self.atlas_width as f32;
-                let v0 = 0.0;
+                let v0 = self.atlas_y as f32 / self.atlas_height as f32;
                 let u1 =
                     (glyph_info.texture_id + glyph_info.width) as f32 / self.atlas_width as f32;
-                let v1 = glyph_info.height as f32 / self.atlas_height as f32;
+                let v1 = (self.atlas_y as f32 + glyph_info.height as f32) / self.atlas_height as f32;
 
                 let index_offset = vertices.len() as u16;
 
