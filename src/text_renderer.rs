@@ -98,7 +98,7 @@ impl TextRenderer {
         graphics_queue: vk::Queue,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let font_data = include_bytes!(
-            "/home/codebam/Documents/rust/vulkan-terminal/result/share/fonts/truetype/NerdFonts/FiraCode/FiraCodeNerdFont-Regular.ttf"
+            "../result/share/fonts/truetype/NerdFonts/FiraCode/FiraCodeNerdFont-Regular.ttf"
         );
         let font = Font::from_bytes(font_data as &[u8], FontSettings::default())?;
         let font_size = 16.0;
