@@ -84,6 +84,7 @@ pub struct TextRenderer {
     pub atlas_x: u32,
     pub atlas_y: u32,
     pub atlas_data: Vec<u8>,
+    pub fixed_advance: f32,
 }
 
 impl TextRenderer {
@@ -101,6 +102,9 @@ impl TextRenderer {
         );
         let font = Font::from_bytes(font_data as &[u8], FontSettings::default())?;
         let font_size = 16.0;
+
+        let (metrics, _) = font.rasterize('M', font_size);
+        let fixed_advance = metrics.advance_width;
 
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
         let (graphics_pipeline, pipeline_layout) =
@@ -140,6 +144,7 @@ impl TextRenderer {
             font,
             glyph_cache: HashMap::new(),
             font_size,
+            fixed_advance,
             device,
             graphics_pipeline,
             pipeline_layout,
@@ -580,7 +585,6 @@ impl TextRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a command buffer to transition the image layout and copy data
         let alloc_info = vk::CommandBufferAllocateInfo {
             level: vk::CommandBufferLevel::PRIMARY,
             command_pool,
@@ -597,7 +601,6 @@ impl TextRenderer {
 
         unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
 
-        // First transition: UNDEFINED -> TRANSFER_DST_OPTIMAL
         let barrier1 = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -628,7 +631,6 @@ impl TextRenderer {
             );
         }
 
-        // Copy data from staging buffer to image
         let region = vk::BufferImageCopy {
             buffer_offset: 0,
             buffer_row_length: 0,
@@ -658,7 +660,6 @@ impl TextRenderer {
             );
         }
 
-        // Second transition: TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
         let barrier2 = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -691,7 +692,6 @@ impl TextRenderer {
             device.end_command_buffer(command_buffer)?;
         }
 
-        // Submit the command buffer
         let submit_info = vk::SubmitInfo {
             command_buffer_count: 1,
             p_command_buffers: &command_buffer,
@@ -716,7 +716,6 @@ impl TextRenderer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let image_size = (self.atlas_width * self.atlas_height) as usize;
 
-        // Create staging buffer
         let buffer_info = vk::BufferCreateInfo {
             size: image_size as vk::DeviceSize,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
@@ -749,7 +748,6 @@ impl TextRenderer {
                 .bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)?
         };
 
-        // Upload pixel data to staging buffer
         unsafe {
             let data_ptr = self.device.map_memory(
                 staging_buffer_memory,
@@ -765,7 +763,6 @@ impl TextRenderer {
             self.device.unmap_memory(staging_buffer_memory);
         }
 
-        // Transition image layout and copy data
         Self::transition_image_and_copy_data(
             &self.device,
             self.texture_image,
@@ -776,7 +773,6 @@ impl TextRenderer {
             self.atlas_height,
         )?;
 
-        // Cleanup staging buffer
         unsafe {
             self.device.destroy_buffer(staging_buffer, None);
             self.device.free_memory(staging_buffer_memory, None);
@@ -823,6 +819,7 @@ impl TextRenderer {
 
             if let Some(glyph_info) = self.glyph_cache.get(&ch) {
                 let x_pos = current_x + glyph_info.bearing_x as f32;
+                // Align to baseline using bearing_y (ymin) for consistent inline rendering
                 let y_pos = y - glyph_info.bearing_y as f32;
 
                 let w = glyph_info.width as f32;
@@ -832,7 +829,8 @@ impl TextRenderer {
                 let v0 = self.atlas_y as f32 / self.atlas_height as f32;
                 let u1 =
                     (glyph_info.texture_id + glyph_info.width) as f32 / self.atlas_width as f32;
-                let v1 = (self.atlas_y as f32 + glyph_info.height as f32) / self.atlas_height as f32;
+                let v1 =
+                    (self.atlas_y as f32 + glyph_info.height as f32) / self.atlas_height as f32;
 
                 let index_offset = vertices.len() as u16;
 
@@ -868,7 +866,7 @@ impl TextRenderer {
                     index_offset,
                 ]);
 
-                current_x += glyph_info.advance;
+                current_x += self.fixed_advance;
             }
         }
 
@@ -952,7 +950,7 @@ impl TextRenderer {
                 height: metrics.height as u32,
                 bearing_x: metrics.xmin,
                 bearing_y: metrics.ymin,
-                advance: metrics.advance_width,
+                advance: self.fixed_advance,
             };
 
             self.glyph_cache.insert(ch, glyph_info);
