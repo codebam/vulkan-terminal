@@ -1,11 +1,11 @@
-mod vulkan;
-mod text_renderer;
 mod terminal;
+mod text_renderer;
+mod vulkan;
 
 use std::time::Instant;
-use vulkan::VulkanContext;
+use terminal::TerminalState;
 use text_renderer::TextRenderer;
-use terminal::{TerminalState, TerminalColor};
+use vulkan::VulkanContext;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -28,7 +28,7 @@ struct VulkanTerminalApp {
 impl VulkanTerminalApp {
     fn new() -> Self {
         let terminal_state = TerminalState::new(80, 24);
-        
+
         Self {
             window: None,
             vulkan_context: None,
@@ -43,7 +43,7 @@ impl VulkanTerminalApp {
     fn init_vulkan(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(window) = &self.window {
             let vulkan_context = VulkanContext::new(window)?;
-            
+
             let text_renderer = TextRenderer::new(
                 vulkan_context.device.clone(),
                 vulkan_context.render_pass,
@@ -189,10 +189,8 @@ impl VulkanTerminalApp {
                             &[],
                         );
 
-                        let push_constants = text_renderer::PushConstants {
-                            screen_dimensions,
-                        };
-                        let push_constants_bytes = unsafe {
+                        let push_constants = text_renderer::PushConstants { screen_dimensions };
+                        let push_constants_bytes = {
                             std::slice::from_raw_parts(
                                 &push_constants as *const _ as *const u8,
                                 std::mem::size_of::<text_renderer::PushConstants>(),
@@ -309,7 +307,8 @@ impl VulkanTerminalApp {
         let terminal_width = ((width as f32 - margin_x) / char_width) as usize;
         let terminal_height = ((height as f32 - margin_y) / char_height) as usize;
 
-        self.terminal_state.resize(terminal_width.max(1), terminal_height.max(1));
+        self.terminal_state
+            .resize(terminal_width.max(1), terminal_height.max(1));
     }
 }
 
@@ -331,23 +330,30 @@ impl ApplicationHandler for VulkanTerminalApp {
             .with_resizable(true);
 
         let window = event_loop.create_window(window_attributes).unwrap();
-        
+
         let window_size = window.inner_size();
         self.resize_terminal(window_size.width, window_size.height);
-        
-        self.terminal_state.write_str("Welcome to Vulkan Terminal!\n");
-        self.terminal_state.write_str("Type 'help' for available commands.\n");
+
+        self.terminal_state
+            .write_str("Welcome to Vulkan Terminal!\n");
+        self.terminal_state
+            .write_str("Type 'help' for available commands.\n");
         self.terminal_state.write_str("$ ");
-        
+
         self.window = Some(window);
-        
+
         if let Err(e) = self.init_vulkan() {
             eprintln!("Failed to initialize Vulkan: {}", e);
             event_loop.exit();
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -362,7 +368,7 @@ impl ApplicationHandler for VulkanTerminalApp {
                 if let Err(e) = self.draw() {
                     eprintln!("Draw error: {}", e);
                 }
-                
+
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }

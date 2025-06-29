@@ -35,10 +35,10 @@ const MAX_FRAMES_IN_FLIGHT: usize = 2;
 impl VulkanContext {
     pub fn new(window: &Window) -> Result<Self, Box<dyn std::error::Error>> {
         let entry = unsafe { Entry::load()? };
-        
+
         let app_name = CString::new("Vulkan Terminal")?;
         let engine_name = CString::new("No Engine")?;
-        
+
         let app_info = vk::ApplicationInfo {
             p_application_name: app_name.as_ptr(),
             application_version: vk::make_api_version(0, 1, 0, 0),
@@ -54,9 +54,8 @@ impl VulkanContext {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let extension_names = ash_window::enumerate_required_extensions(
-            window.display_handle()?.as_raw()
-        )?;
+        let extension_names =
+            ash_window::enumerate_required_extensions(window.display_handle()?.as_raw())?;
 
         let create_info = vk::InstanceCreateInfo {
             p_application_info: &app_info,
@@ -84,26 +83,26 @@ impl VulkanContext {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
         let physical_device = physical_devices[0];
 
-        let queue_family_properties = unsafe {
-            instance.get_physical_device_queue_family_properties(physical_device)
-        };
+        let queue_family_properties =
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
         let graphics_queue_family_index = queue_family_properties
             .iter()
             .enumerate()
             .position(|(index, queue_family)| {
-                queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS) &&
-                unsafe {
-                    surface_loader
-                        .get_physical_device_surface_support(
-                            physical_device,
-                            index as u32,
-                            surface,
-                        )
-                        .unwrap_or(false)
-                }
+                queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                    && unsafe {
+                        surface_loader
+                            .get_physical_device_surface_support(
+                                physical_device,
+                                index as u32,
+                                surface,
+                            )
+                            .unwrap_or(false)
+                    }
             })
-            .expect("Could not find suitable queue family") as u32;
+            .expect("Could not find suitable queue family")
+            as u32;
 
         let queue_priorities = [1.0];
         let queue_info = vk::DeviceQueueCreateInfo {
@@ -125,9 +124,7 @@ impl VulkanContext {
             ..Default::default()
         };
 
-        let device = unsafe {
-            instance.create_device(physical_device, &device_create_info, None)?
-        };
+        let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family_index, 0) };
         let present_queue = graphics_queue;
@@ -199,9 +196,7 @@ impl VulkanContext {
             ..Default::default()
         };
 
-        let swapchain = unsafe {
-            swapchain_loader.create_swapchain(&swapchain_create_info, None)?
-        };
+        let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None)? };
 
         let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain)? };
 
@@ -305,7 +300,8 @@ impl VulkanContext {
             ..Default::default()
         };
 
-        let command_buffers = unsafe { device.allocate_command_buffers(&command_buffer_allocate_info)? };
+        let command_buffers =
+            unsafe { device.allocate_command_buffers(&command_buffer_allocate_info)? };
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo {
@@ -353,7 +349,10 @@ impl VulkanContext {
         })
     }
 
-    pub fn draw_frame<F>(&mut self, mut record_commands: F) -> Result<(), Box<dyn std::error::Error>>
+    pub fn draw_frame<F>(
+        &mut self,
+        mut record_commands: F,
+    ) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnMut(vk::CommandBuffer) -> Result<(), Box<dyn std::error::Error>>,
     {
@@ -378,7 +377,8 @@ impl VulkanContext {
             };
 
             if let Some(image_in_flight_fence) = self.images_in_flight[image_index as usize] {
-                self.device.wait_for_fences(&[image_in_flight_fence], true, u64::MAX)?;
+                self.device
+                    .wait_for_fences(&[image_in_flight_fence], true, u64::MAX)?;
             }
 
             self.images_in_flight[image_index as usize] = Some(fence);
@@ -407,11 +407,8 @@ impl VulkanContext {
 
             self.device.reset_fences(&[fence])?;
 
-            self.device.queue_submit(
-                self.graphics_queue,
-                &[submit_info],
-                fence,
-            )?;
+            self.device
+                .queue_submit(self.graphics_queue, &[submit_info], fence)?;
 
             let swapchains = [self.swapchain];
             let image_indices = [image_index];
@@ -422,7 +419,8 @@ impl VulkanContext {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            let result = self.swapchain_loader
+            let result = self
+                .swapchain_loader
                 .queue_present(self.present_queue, &present_info);
 
             match result {

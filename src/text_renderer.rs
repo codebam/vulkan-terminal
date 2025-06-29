@@ -1,5 +1,5 @@
-use ash::vk;
 use ash::Device;
+use ash::vk;
 use bytemuck::{Pod, Zeroable};
 use fontdue::{Font, FontSettings};
 use std::collections::HashMap;
@@ -96,29 +96,21 @@ impl TextRenderer {
         command_pool: vk::CommandPool,
         graphics_queue: vk::Queue,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let font_data = include_bytes!("/home/codebam/Documents/rust/vulkan-terminal/result/share/fonts/truetype/NerdFonts/FiraCode/FiraCodeNerdFont-Regular.ttf");
+        let font_data = include_bytes!(
+            "/home/codebam/Documents/rust/vulkan-terminal/result/share/fonts/truetype/NerdFonts/FiraCode/FiraCodeNerdFont-Regular.ttf"
+        );
         let font = Font::from_bytes(font_data as &[u8], FontSettings::default())?;
         let font_size = 16.0;
 
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
-        let (graphics_pipeline, pipeline_layout) = Self::create_graphics_pipeline(
-            &device,
-            render_pass,
-            extent,
-            descriptor_set_layout,
-        )?;
+        let (graphics_pipeline, pipeline_layout) =
+            Self::create_graphics_pipeline(&device, render_pass, extent, descriptor_set_layout)?;
 
-        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
-            &device,
-            physical_device,
-            instance,
-        )?;
+        let (vertex_buffer, vertex_buffer_memory) =
+            Self::create_vertex_buffer(&device, physical_device, instance)?;
 
-        let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
-            &device,
-            physical_device,
-            instance,
-        )?;
+        let (index_buffer, index_buffer_memory) =
+            Self::create_index_buffer(&device, physical_device, instance)?;
 
         let atlas_width = 1024;
         let atlas_height = 1024;
@@ -169,12 +161,19 @@ impl TextRenderer {
             atlas_data,
         };
 
-        text_renderer.initialize_texture(command_pool, graphics_queue, physical_device, instance)?;
+        text_renderer.initialize_texture(
+            command_pool,
+            graphics_queue,
+            physical_device,
+            instance,
+        )?;
 
         Ok(text_renderer)
     }
 
-    fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, vk::Result> {
+    fn create_descriptor_set_layout(
+        device: &Device,
+    ) -> Result<vk::DescriptorSetLayout, vk::Result> {
         let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_count(1)
@@ -286,9 +285,8 @@ impl TextRenderer {
             .set_layouts(&set_layouts)
             .push_constant_ranges(&push_constant_ranges);
 
-        let pipeline_layout = unsafe {
-            device.create_pipeline_layout(&pipeline_layout_info, None)?
-        };
+        let pipeline_layout =
+            unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
@@ -304,11 +302,7 @@ impl TextRenderer {
 
         let graphics_pipeline = unsafe {
             device
-                .create_graphics_pipelines(
-                    vk::PipelineCache::null(),
-                    &[pipeline_info],
-                    None,
-                )
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
                 .map_err(|(_, err)| err)?[0]
         };
 
@@ -320,10 +314,7 @@ impl TextRenderer {
         Ok((graphics_pipeline, pipeline_layout))
     }
 
-    fn create_shader_module(
-        device: &Device,
-        code: &[u8],
-    ) -> Result<vk::ShaderModule, vk::Result> {
+    fn create_shader_module(device: &Device, code: &[u8]) -> Result<vk::ShaderModule, vk::Result> {
         let mut align_code = Vec::with_capacity(code.len());
         align_code.extend_from_slice(code);
 
@@ -355,9 +346,8 @@ impl TextRenderer {
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
 
-        let mem_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         let memory_type_index = Self::find_memory_type(
             mem_requirements.memory_type_bits,
@@ -396,9 +386,8 @@ impl TextRenderer {
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
 
-        let mem_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         let memory_type_index = Self::find_memory_type(
             mem_requirements.memory_type_bits,
@@ -426,7 +415,6 @@ impl TextRenderer {
         width: u32,
         height: u32,
     ) -> Result<(vk::Image, vk::DeviceMemory), Box<dyn std::error::Error>> {
-
         let image_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
             extent: vk::Extent3D {
@@ -449,9 +437,8 @@ impl TextRenderer {
 
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
 
-        let mem_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         let memory_type_index = Self::find_memory_type(
             mem_requirements.memory_type_bits,
@@ -572,7 +559,7 @@ impl TextRenderer {
 
         Ok(descriptor_sets)
     }
-    
+
     fn initialize_texture(
         &mut self,
         command_pool: vk::CommandPool,
@@ -583,7 +570,7 @@ impl TextRenderer {
         self.update_texture(command_pool, graphics_queue, physical_device, instance)?;
         Ok(())
     }
-    
+
     fn transition_image_and_copy_data(
         device: &Device,
         image: vk::Image,
@@ -600,16 +587,16 @@ impl TextRenderer {
             command_buffer_count: 1,
             ..Default::default()
         };
-        
+
         let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info)?[0] };
-        
+
         let begin_info = vk::CommandBufferBeginInfo {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             ..Default::default()
         };
-        
+
         unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
-        
+
         // First transition: UNDEFINED -> TRANSFER_DST_OPTIMAL
         let barrier1 = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::UNDEFINED,
@@ -628,7 +615,7 @@ impl TextRenderer {
             dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
             ..Default::default()
         };
-        
+
         unsafe {
             device.cmd_pipeline_barrier(
                 command_buffer,
@@ -640,7 +627,7 @@ impl TextRenderer {
                 &[barrier1],
             );
         }
-        
+
         // Copy data from staging buffer to image
         let region = vk::BufferImageCopy {
             buffer_offset: 0,
@@ -660,7 +647,7 @@ impl TextRenderer {
             },
             ..Default::default()
         };
-        
+
         unsafe {
             device.cmd_copy_buffer_to_image(
                 command_buffer,
@@ -670,7 +657,7 @@ impl TextRenderer {
                 &[region],
             );
         }
-        
+
         // Second transition: TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
         let barrier2 = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -689,7 +676,7 @@ impl TextRenderer {
             dst_access_mask: vk::AccessFlags::SHADER_READ,
             ..Default::default()
         };
-        
+
         unsafe {
             device.cmd_pipeline_barrier(
                 command_buffer,
@@ -700,23 +687,23 @@ impl TextRenderer {
                 &[],
                 &[barrier2],
             );
-            
+
             device.end_command_buffer(command_buffer)?;
         }
-        
+
         // Submit the command buffer
         let submit_info = vk::SubmitInfo {
             command_buffer_count: 1,
             p_command_buffers: &command_buffer,
             ..Default::default()
         };
-        
+
         unsafe {
             device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null())?;
             device.queue_wait_idle(graphics_queue)?;
             device.free_command_buffers(command_pool, &[command_buffer]);
         }
-        
+
         Ok(())
     }
 
@@ -728,7 +715,7 @@ impl TextRenderer {
         instance: &ash::Instance,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let image_size = (self.atlas_width * self.atlas_height) as usize;
-        
+
         // Create staging buffer
         let buffer_info = vk::BufferCreateInfo {
             size: image_size as vk::DeviceSize,
@@ -736,29 +723,32 @@ impl TextRenderer {
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
-        
+
         let staging_buffer = unsafe { self.device.create_buffer(&buffer_info, None)? };
-        let mem_requirements = unsafe { self.device.get_buffer_memory_requirements(staging_buffer) };
-        
-        let mem_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
-        
+        let mem_requirements =
+            unsafe { self.device.get_buffer_memory_requirements(staging_buffer) };
+
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
         let memory_type_index = Self::find_memory_type(
             mem_requirements.memory_type_bits,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             &mem_properties,
         )?;
-        
+
         let alloc_info = vk::MemoryAllocateInfo {
             allocation_size: mem_requirements.size,
             memory_type_index,
             ..Default::default()
         };
-        
+
         let staging_buffer_memory = unsafe { self.device.allocate_memory(&alloc_info, None)? };
-        unsafe { self.device.bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)? };
-        
+        unsafe {
+            self.device
+                .bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)?
+        };
+
         // Upload pixel data to staging buffer
         unsafe {
             let data_ptr = self.device.map_memory(
@@ -767,19 +757,31 @@ impl TextRenderer {
                 image_size as vk::DeviceSize,
                 vk::MemoryMapFlags::empty(),
             )?;
-            std::ptr::copy_nonoverlapping(self.atlas_data.as_ptr(), data_ptr as *mut u8, image_size);
+            std::ptr::copy_nonoverlapping(
+                self.atlas_data.as_ptr(),
+                data_ptr as *mut u8,
+                image_size,
+            );
             self.device.unmap_memory(staging_buffer_memory);
         }
-        
+
         // Transition image layout and copy data
-        Self::transition_image_and_copy_data(&self.device, self.texture_image, staging_buffer, command_pool, graphics_queue, self.atlas_width, self.atlas_height)?;
-        
+        Self::transition_image_and_copy_data(
+            &self.device,
+            self.texture_image,
+            staging_buffer,
+            command_pool,
+            graphics_queue,
+            self.atlas_width,
+            self.atlas_height,
+        )?;
+
         // Cleanup staging buffer
         unsafe {
             self.device.destroy_buffer(staging_buffer, None);
             self.device.free_memory(staging_buffer_memory, None);
         }
-        
+
         Ok(())
     }
 
@@ -789,9 +791,7 @@ impl TextRenderer {
         mem_properties: &vk::PhysicalDeviceMemoryProperties,
     ) -> Result<u32, Box<dyn std::error::Error>> {
         for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
-            if (type_filter & (1 << i)) != 0
-                && memory_type.property_flags.contains(properties)
-            {
+            if (type_filter & (1 << i)) != 0 && memory_type.property_flags.contains(properties) {
                 return Ok(i as u32);
             }
         }
@@ -830,7 +830,8 @@ impl TextRenderer {
 
                 let u0 = glyph_info.texture_id as f32 / self.atlas_width as f32;
                 let v0 = 0.0;
-                let u1 = (glyph_info.texture_id + glyph_info.width) as f32 / self.atlas_width as f32;
+                let u1 =
+                    (glyph_info.texture_id + glyph_info.width) as f32 / self.atlas_width as f32;
                 let v1 = glyph_info.height as f32 / self.atlas_height as f32;
 
                 let index_offset = vertices.len() as u16;
@@ -889,7 +890,11 @@ impl TextRenderer {
                 vk::MemoryMapFlags::empty(),
             )?;
 
-            std::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, data_ptr as *mut u8, data_size as usize);
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr() as *const u8,
+                data_ptr as *mut u8,
+                data_size as usize,
+            );
 
             self.device.unmap_memory(self.vertex_buffer_memory);
         }
@@ -908,7 +913,11 @@ impl TextRenderer {
                 vk::MemoryMapFlags::empty(),
             )?;
 
-            std::ptr::copy_nonoverlapping(indices.as_ptr() as *const u8, data_ptr as *mut u8, data_size as usize);
+            std::ptr::copy_nonoverlapping(
+                indices.as_ptr() as *const u8,
+                data_ptr as *mut u8,
+                data_size as usize,
+            );
 
             self.device.unmap_memory(self.index_buffer_memory);
         }
@@ -931,9 +940,8 @@ impl TextRenderer {
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {
-                    let index =
-                        ((self.atlas_y + y as u32) * self.atlas_width + (self.atlas_x + x as u32))
-                            as usize;
+                    let index = ((self.atlas_y + y as u32) * self.atlas_width
+                        + (self.atlas_x + x as u32)) as usize;
                     self.atlas_data[index] = bitmap[y * metrics.width + x];
                 }
             }
@@ -957,18 +965,22 @@ impl TextRenderer {
 impl Drop for TextRenderer {
     fn drop(&mut self) {
         unsafe {
-            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_sampler(self.texture_sampler, None);
-            self.device.destroy_image_view(self.texture_image_view, None);
+            self.device
+                .destroy_image_view(self.texture_image_view, None);
             self.device.destroy_image(self.texture_image, None);
             self.device.free_memory(self.texture_image_memory, None);
             self.device.destroy_buffer(self.index_buffer, None);
             self.device.free_memory(self.index_buffer_memory, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
             self.device.free_memory(self.vertex_buffer_memory, None);
-            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.device.destroy_pipeline(self.graphics_pipeline, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
         }
     }
 }
